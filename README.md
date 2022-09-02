@@ -1,7 +1,7 @@
 # Data-Wrangling
 An example of working with relational databases in R
 
-We have an excel workbook containing related tables that we wish to merge into a cohesive report. 
+We have an excel workbook (DataWrangling.xlsx) containing related tables that we wish to merge into a cohesive report. 
 Tables contain information for patient clinical data, serum protein assays, tissue sample metadata and the associated RNA sequence results.
 
 
