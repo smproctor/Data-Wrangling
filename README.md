@@ -7,7 +7,7 @@ Tables contain information for patient clinical data, serum protein assays, tiss
 
 
 Data Specification:
-Study_ID: The GEO study number, from the file name
+Study_ID: The GEO study number, from the file name  
 Patient_ID: The unique patient identifier, from the Patient Clinical Data worksheet
 Unique_Patient_ID: Concatenation of the STUDY_ID and the Patient_ID with underscore
 Sex: The sex of the patient
