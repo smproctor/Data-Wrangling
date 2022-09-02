@@ -1,0 +1,130 @@
+#install.packages("readxl")
+#install.packages('data.table')
+#install.packages("openxlsx")
+library(readxl)
+library(stringr)
+library(dplyr)
+library(tidyverse)
+library(openxlsx)
+
+# Load data from Excel file with multiple sheets
+multiplesheets <- function(fname) {
+  
+  sheets <- readxl::excel_sheets(fname)
+  tibble<- lapply(sheets, function(x) readxl::read_excel(fname, sheet = x))
+  data_frame <- lapply(tibble, as.data.frame)
+  
+  names(data_frame) <- sheets
+  return(data_frame)
+}
+path <- "Desktop/DataWrangling.xlsx"
+data_frame = multiplesheets(path)
+
+Patient_clinical_data <- data_frame$Patient_clinical_data
+Tissue_sample_metadata <- data_frame$`Tissue Sample Metadata`
+Serum_protein_data <- data_frame$`Serum Protein data`
+RNA_seq_data <- data_frame$`RNA-seq (RPKM)`
+
+# R doesn't like column names with spaces, so let's fix those now
+colnames(Patient_clinical_data)[2] <- 'Patient_ID'
+colnames(Tissue_sample_metadata)[1] <- 'Patient_Number'
+colnames(Tissue_sample_metadata)[3] <- 'Sample_General_Pathology'
+colnames(Serum_protein_data)[3] <- "Serum_IL6_gL"
+colnames(Serum_protein_data)[4] <- "Serum_IL6R_mgL"
+
+# Check the class of our variables to make sure they match the data specifications
+lapply(Patient_clinical_data, class)
+lapply(Tissue_sample_metadata, class)
+lapply(Serum_protein_data, class) # Notice Serum_IL6_gl and Serum_IL6R_mgL are type charcater
+lapply(RNA_seq_data, class)
+
+# Change patient age from type numeric to type integer to match our desired result 
+Patient_clinical_data$Age <- as.integer(round(Patient_clinical_data$Age))
+
+# Change Serum_IL6_gl and Serum_IL6R_mgL to type numeric 
+# Note: will coerce non-numeric values to NA, which is okay for our purposes here 
+Serum_protein_data$Serum_IL6_gL <- as.numeric(Serum_protein_data$Serum_IL6_gL)
+Serum_protein_data$Serum_IL6R_mgL  <- as.numeric(Serum_protein_data$Serum_IL6R_mgL)
+
+# Make a new column in Serum_protein_data called Serum_IL6R_gL - Serum for IL6R converted to g/L
+Serum_protein_data$Serum_IL6R_gL <- Serum_protein_data$Serum_IL6R_mgL/1000
+
+# If the sample came from a serum protein, then the material type will be SERUM
+# Add a column for material type into Serum_protein_data
+Serum_protein_data$Material <- 'SERUM'
+
+# In Tissue_sample_metadata, allowable values for sample_general_pathology should be: PRIMARY, METASTATIC, NORMAL, NA
+Tissue_sample_metadata$Sample_General_Pathology[Tissue_sample_metadata$Sample_General_Pathology == 'Normal'] <- "NORMAL"
+Tissue_sample_metadata$Sample_General_Pathology[Tissue_sample_metadata$Sample_General_Pathology == 'Metastic Lung'] <- "METASTATIC"
+Tissue_sample_metadata$Sample_General_Pathology[Tissue_sample_metadata$Sample_General_Pathology == 'Liver Tumor'] <- "PRIMARY"
+
+# merge the patienr clinical data and the tissue sample data
+Patient_and_Tissue_data <- merge(Patient_clinical_data, Tissue_sample_metadata[,c('Patient_Number', 'Sample','Sample_General_Pathology','Material')], by.x = "Patient_ID", by.y = "Patient_Number", all = TRUE)
+
+ 
+# Reshape RNA data from wide to long format 
+library(data.table)
+RNA_seq_data_long <- melt(setDT(RNA_seq_data), id.vars = "GeneID")
+RNA_seq_data_long <-  RNA_seq_data_long[order(RNA_seq_data_long$GeneID),]
+
+# Merge patient+tissue data with RNA data
+tissue_rna_data <- merge(Patient_and_Tissue_data, RNA_seq_data_long, by.x = 'Sample', by.y = 'variable', all=T)
+tissue_rna_data <- tissue_rna_data[order(tissue_rna_data$Patient_ID),]
+tissue_rna_data <- tissue_rna_data[order(tissue_rna_data$GeneID),]
+
+# make Unique_Patient_ID column
+tissue_rna_data$Unique_Patient_ID <- paste(tissue_rna_data$Study_ID, tissue_rna_data$Patient_ID, sep = "_")
+# make result unit column -  if the sample comes from tissue then the units are RPKM
+tissue_rna_data$Result_Units <- 'RPKM'
+
+
+# Reshape serum protein data from wide format to long, keeping only the pertinent columns 
+Serum_protein_long <- melt(setDT(Serum_protein_data[,c('Patient','Sample','Serum_IL6_gL','Serum_IL6R_gL')]), id.vars = c("Patient","Sample"), variable.name = "GeneID")
+Serum_protein_long <- Serum_protein_long[order(Serum_protein_long$Patient),]
+Serum_protein_long <- Serum_protein_long[order(Serum_protein_long$Sample),]
+
+# Simplify possible values of GeneID from 'Serum_IL6_gL' and 'Serum_IL6R_gL' to 'IL6' and 'IL6R'
+#first change from type factor to type character
+Serum_protein_long$GeneID = as.character(Serum_protein_long$GeneID)
+Serum_protein_long$GeneID[Serum_protein_long$GeneID == 'Serum_IL6_gL'] <- "IL6"
+Serum_protein_long$GeneID[Serum_protein_long$GeneID == 'Serum_IL6R_gL'] <- "IL6R"
+
+# merge serum protein data and patient data to get age, sex, and study ID
+Serum_protein_long <- merge(Patient_clinical_data, Serum_protein_long, by.x = 'Patient_ID', by.y = 'Patient')
+
+# Sample general pathology for all serum data will be NA
+Serum_protein_long$Sample_General_Pathology <- 'NA'
+# Material for all serum data will be SERUM
+Serum_protein_long$Material <- 'SERUM'
+
+# make Unique_Patient_ID column
+Serum_protein_long$Unique_Patient_ID <- paste(Serum_protein_long$Study_ID, Serum_protein_long$Patient, sep = "_")
+# make result unit column - if the sample comes from serum protein then the units are g/L
+Serum_protein_long$Result_Units <- 'g/L'
+
+# rearrange columns of serum protein data and tissue/rna data so that we can bind them together 
+Serum_protein_long <- Serum_protein_long[,c('Study_ID','Patient_ID','Unique_Patient_ID','Sex','Age','Sample','Sample_General_Pathology','Material','GeneID','value','Result_Units')]
+tissue_rna_data <- tissue_rna_data[,c('Study_ID','Patient_ID','Unique_Patient_ID','Sex','Age','Sample','Sample_General_Pathology','Material','GeneID','value','Result_Units')]
+
+# bind tissue/rna data and serum protein data
+report <- rbind(tissue_rna_data, Serum_protein_long)
+# order by patient id
+report <- report[order(report$Patient_ID),]
+
+
+# Put some final touches on the report so it exactly matches our desired output
+
+# Create the Status variable based on whether a valid result exists 
+report$Status = 'NA'
+report <- report %>%  mutate(Status = if_else(is.na(value), 'NOT DONE', 'NA'))
+
+#rename columns to exactly match desired result
+report <- report %>% rename(
+  Sample_ID = Sample,
+  Material_type = Material,
+  Gene_Symbol = GeneID,
+  Result = value
+)
+
+# The final result
+View(report)
